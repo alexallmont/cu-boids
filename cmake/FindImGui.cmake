@@ -1,5 +1,7 @@
 include(FetchContent)
 
+find_package(glfw REQUIRED)
+
 FetchContent_Declare(
     imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git

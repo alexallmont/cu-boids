@@ -2,20 +2,21 @@ cmake_minimum_required(VERSION 3.15 FATAL_ERROR)
 
 # Global project settings
 project(imgui_cmake LANGUAGES CXX CUDA)
-
-include(cmake/FetchGLFW.cmake)
-include(cmake/FetchImgui.cmake)
-
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CUDA_STANDARD 17)
 
-set(CMAKE_CUDA_ARCHITECTURES "native")
-
+# Setup CUDA/Thrust, build for active system
 find_package(CUDAToolkit REQUIRED)
 find_package(Thrust REQUIRED)
-
 thrust_create_target(Thrust)
 
+set(CMAKE_CUDA_ARCHITECTURES native)
+set(CUDA_SEPARABLE_COMPILATION ON)
+
+# Fetch libs for ImGui and GLAD (and GLFW)
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+find_package(imgui REQUIRED)
+add_subdirectory(glad)
 
 # Add library to test linkage
 add_library(foo_lib STATIC
@@ -28,24 +29,26 @@ target_link_libraries(foo_lib
         Thrust
 )
 
-set_target_properties(foo_lib
-    PROPERTIES
-        CUDA_SEPARABLE_COMPILATION ON
-)
-
+target_compile_options(foo_lib
+    PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:
+        --extended-lambda
+        -Wno-deprecated-gpu-targets
+>)
 
 # Main app using library
 add_executable(main_app
     main.cu
 )
 
-set_target_properties(main_app
-    PROPERTIES
-        CUDA_SEPARABLE_COMPILATION ON
-)
-
 target_link_libraries(main_app
     PRIVATE
         imgui_static
         foo_lib
+        glad
 )
+
+target_compile_options(main_app
+    PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:
+        --extended-lambda
+        -Wno-deprecated-gpu-targets
+>)

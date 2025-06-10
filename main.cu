@@ -1,6 +1,7 @@
 #include <iostream>
-#include <thrust/host_vector.h>
-#include <GLFW/glfw3.h>
+
+#include "glad/glad.h"
+#include "GLFW/glfw3.h"
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -8,64 +9,179 @@
 
 #include "foo.cuh"
 
+namespace {
+
+static GLFWwindow* glfw_window = nullptr;
+static const char* glsl_version = "#version 150";
+
 static void glfw_error_callback(int error, const char* description) {
     std::cerr << "GLFW Error " << error << ": " << description << std::endl;
 }
 
-__host__ static __inline__ float simple_rand()
-{
-    return ((float)rand() / RAND_MAX);
+static bool init_glfw() {
+    glfwSetErrorCallback(glfw_error_callback);
+    if (glfwInit()) {
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE); // 3.2+ only
+        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE); // Required on Mac
+
+        // Create window with graphics context
+        glfw_window = glfwCreateWindow(1280, 720, "cu-boids", nullptr, nullptr);
+        if (glfw_window) {
+            glfwMakeContextCurrent(glfw_window);
+            glfwSwapInterval(1); // Enable vsync
+
+            // Load GL functions with GLAD
+            if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
+                std::cerr << "Failed to initialize GLAD" << std::endl;
+                glfwTerminate();
+                return false;
+            }
+
+            return true;
+        }
+
+        glfwTerminate();
+    }
+    return false;
 }
 
-int main(int, char**)
-{
-    glfwSetErrorCallback(glfw_error_callback);
-    if (!glfwInit()) {
-        return 1;
-    }
-
-    const char* glsl_version = "#version 150";
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);  // 3.2+ only
-    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);            // Required on Mac
-
-    // Create window with graphics context
-    GLFWwindow* window = glfwCreateWindow(1280, 720, "Dear ImGui GLFW+OpenGL3 in CMake", nullptr, nullptr);
-    if (window == nullptr) {
-        return 1;
-    }
-    glfwMakeContextCurrent(window);
-    glfwSwapInterval(1); // Enable vsync
-
-    // Setup Dear ImGui context
+static void init_imgui() {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO(); (void)io;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
+
+    // Enable keyboard controls
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
     // Setup Dear ImGui style
     ImGui::StyleColorsDark();
 
     // Setup Platform/Renderer backends
-    ImGui_ImplGlfw_InitForOpenGL(window, true);
+    ImGui_ImplGlfw_InitForOpenGL(glfw_window, true);
     ImGui_ImplOpenGL3_Init(glsl_version);
+}
 
-    // generate 16M random numbers on the host and try running through cuda function
-    std::cout << "CUDA test start: sort 16M floats\n";
-    thrust::host_vector<float> h_vec(1 << 24);
-    thrust::generate(h_vec.begin(), h_vec.end(), simple_rand);
+static void term() {
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+
+    glfwDestroyWindow(glfw_window);
+    glfwTerminate();
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    // Init GL and GUI
+    if (!init_glfw()) {
+        return 1;
+    }
+    init_imgui();
+
+    // Test CUDA is alive by generating random numbers on host and running them through external fn
+    std::cout << "CUDA test start: sort 1M floats\n";
+    thrust::host_vector<float> h_vec(1 << 10);
+    thrust::generate(h_vec.begin(), h_vec.end(), [] __host__ (){
+        return ((float)rand() / RAND_MAX);
+    });
     foo_sort_floats(h_vec);
     std::cout << "CUDA test end\n";
 
     // GUI state
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
-    while (!glfwWindowShouldClose(window)) {
+    // FIXME vertex buffer object and vertex array object for test triangle
+    float vertices[] = {
+        -0.5f, -0.5f, 0.0f,
+        0.5f, -0.5f, 0.0f,
+        0.0f,  0.5f, 0.0f
+    };
+
+    unsigned int VAO, VBO;
+    glGenVertexArrays(1, &VAO);
+    glGenBuffers(1, &VBO);
+
+    // Bind the Vertex Array Object first, then bind and set vertex buffer(s), and then configure vertex attributes(s)
+    glBindVertexArray(VAO);
+    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    // Unbind to avoid accidental overwrite elsewhere
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+
+    // FIXME vertex shader direct conversion from vec3 to vec4
+    static const char *vertexShaderSource =
+        "#version 330 core\n"
+        "layout (location = 0) in vec3 aPos;\n"
+        "void main()\n"
+        "{\n"
+        "   gl_Position = vec4(aPos.x, aPos.y, aPos.z, 1.0);\n"
+        "}\0"; // FIXME trailing 0 needed?
+
+    unsigned int vertexShader;
+    vertexShader = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(vertexShader, 1, &vertexShaderSource, nullptr);
+    glCompileShader(vertexShader);
+
+    int success;
+    char infoLog[512];
+    glGetShaderiv(vertexShader, GL_COMPILE_STATUS, &success);
+    if (!success) {
+        glGetShaderInfoLog(vertexShader, 512, nullptr, infoLog);
+        std::cout << "ERROR::SHADER::VERTEX::COMPILATION_FAILED\n" << infoLog << std::endl;
+        term();
+        return 2;
+    }
+
+    // FIXME fragment shader fixed colour for now
+    static const char *fragmentShaderSource =
+        "#version 330 core\n"
+        "out vec4 FragColor;\n"
+        "void main()\n"
+        "{\n"
+        "    FragColor = vec4(1.0f, 0.5f, 0.2f, 1.0f);\n"
+        "}\0";  // FIXME trailing 0 needed?
+
+    unsigned int fragmentShader;
+    fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(fragmentShader, 1, &fragmentShaderSource, NULL);
+    glCompileShader(fragmentShader);
+
+    glGetShaderiv(fragmentShader, GL_COMPILE_STATUS, &success);
+    if (!success) {
+        // FIXME tidy reuse of infoLog and 512 into separate class
+        glGetShaderInfoLog(fragmentShader, 512, nullptr, infoLog);
+        std::cout << "ERROR::SHADER::VERTEX::COMPILATION_FAILED\n" << infoLog << std::endl;
+        term();
+        return 2;
+    }
+
+    // FIXME create shader program
+    unsigned int shaderProgram;
+    shaderProgram = glCreateProgram();
+    glAttachShader(shaderProgram, vertexShader);
+    glAttachShader(shaderProgram, fragmentShader);
+    glLinkProgram(shaderProgram);
+
+    glGetProgramiv(shaderProgram, GL_LINK_STATUS, &success);
+    if (!success) {
+        // FIXME tidy reuse of infoLog and 512 into separate class
+        glGetProgramInfoLog(shaderProgram, 512, NULL, infoLog);
+        std::cout << "ERROR::SHADER::VERTEX::COMPILATION_FAILED\n" << infoLog << std::endl;
+        term();
+        return 2;
+    }
+
+    while (!glfwWindowShouldClose(glfw_window)) {
         // Poll and handle events (inputs, window resize, etc.)
         glfwPollEvents();
-        if (glfwGetWindowAttrib(window, GLFW_ICONIFIED) != 0) {
+        if (glfwGetWindowAttrib(glfw_window, GLFW_ICONIFIED) != 0) {
             ImGui_ImplGlfw_Sleep(10);
             continue;
         }
@@ -76,6 +192,7 @@ int main(int, char**)
         ImGui::NewFrame();
 
         // Update GUI
+        ImGuiIO& io = ImGui::GetIO();
         ImGui::Begin("Hello, world!");
         ImGui::Text("This is some useful text.");
         ImGui::ColorEdit3("clear color", (float*)&clear_color);
@@ -86,22 +203,28 @@ int main(int, char**)
         ImGui::Render();
 
         int display_w, display_h;
-        glfwGetFramebufferSize(window, &display_w, &display_h);
+        glfwGetFramebufferSize(glfw_window, &display_w, &display_h);
         glViewport(0, 0, display_w, display_h);
         glClearColor(clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, clear_color.w);
         glClear(GL_COLOR_BUFFER_BIT);
+
+        glUseProgram(shaderProgram);
+        glBindVertexArray(VAO);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-        glfwSwapBuffers(window);
+        glfwSwapBuffers(glfw_window);
     }
 
-    // Cleanup
-    ImGui_ImplOpenGL3_Shutdown();
-    ImGui_ImplGlfw_Shutdown();
-    ImGui::DestroyContext();
+    // FIXME tidy
+    glDeleteVertexArrays(1, &VAO);
+    glDeleteBuffers(1, &VBO);
+    glDeleteProgram(shaderProgram);
+    //glDeleteShader(vertexShader); // FIXME needed?
+    //glDeleteShader(fragmentShader);
 
-    glfwDestroyWindow(window);
-    glfwTerminate();
+    term();
 
     return 0;
 }
