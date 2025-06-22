@@ -1,8 +1,20 @@
 #ifndef FOO_CUH
 #define FOO_CUH
 
-#include <thrust/host_vector.h>
+#include <memory>
 
-extern void foo_sort_floats(thrust::host_vector<float>& h_vec);
+class BoidsData {
+public:
+    BoidsData();
+    ~BoidsData();
+
+    void init(size_t n);
+    void step();
+
+private:
+    struct BoidsDataPimpl;
+
+    std::unique_ptr<BoidsDataPimpl> m_pimpl;
+};
 
 #endif // FOO_CUH

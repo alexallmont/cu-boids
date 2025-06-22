@@ -1,5 +1,5 @@
 add_executable(cu-boids
-    main.cu
+    main.cpp
 )
 
 target_link_libraries(cu-boids

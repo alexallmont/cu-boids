@@ -81,15 +81,6 @@ int main(int argc, char** argv) {
     }
     init_imgui();
 
-    // Test CUDA is alive by generating random numbers on host and running them through external fn
-    std::cout << "CUDA test start: sort 1M floats\n";
-    thrust::host_vector<float> h_vec(1 << 10);
-    thrust::generate(h_vec.begin(), h_vec.end(), [] __host__ (){
-        return ((float)rand() / RAND_MAX);
-    });
-    foo_sort_floats(h_vec);
-    std::cout << "CUDA test end\n";
-
     // GUI state
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
@@ -178,6 +169,8 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    BoidsData boids_data;
+
     while (!glfwWindowShouldClose(glfw_window)) {
         // Poll and handle events (inputs, window resize, etc.)
         glfwPollEvents();
@@ -212,6 +205,7 @@ int main(int argc, char** argv) {
         glBindVertexArray(VAO);
         glDrawArrays(GL_TRIANGLES, 0, 3);
 
+        boids_data.step();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         glfwSwapBuffers(glfw_window);
